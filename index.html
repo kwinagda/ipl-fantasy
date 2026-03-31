@@ -323,9 +323,14 @@ function parseJ(text){
 }
 
 // ── SCHEDULE ──────────────────────────────────────────────────────────────────
-async function loadSchedule(){
+async function loadSchedule(force=false){
   document.getElementById('sched-loader').style.display='block';
   document.getElementById('sched-list').style.display='none';
+  // Use cached schedule if loaded today and not forcing refresh
+  const todayKey=new Date().toISOString().split('T')[0];
+  if(!force && G.matches.length && G.lastScheduleFetch===todayKey){
+    renderSchedule();return;
+  }
   try{
     const todayIST=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Kolkata'})).toISOString().split('T')[0];
     const text=await claude(
@@ -344,6 +349,7 @@ async function loadSchedule(){
       Include ALL matches for the full tournament. Return only the JSON array.`
     );
     G.matches=parseJ(text);
+    G.lastScheduleFetch=new Date().toISOString().split('T')[0];
     // Preserve locked statuses
     Object.keys(G.mdata).forEach(mid=>{
       const m=G.matches.find(x=>x.id===mid);
@@ -353,10 +359,12 @@ async function loadSchedule(){
   }catch(e){
     console.error(e);
     if(!G.matches.length){
-      document.getElementById('sched-loader').innerHTML='<div class="ltxt" style="color:var(--hot)">Failed to load schedule.<br>Check connection &amp; try again.</div>';
+      document.getElementById('sched-loader').innerHTML=`
+        <div class="ltxt" style="color:var(--hot);margin-bottom:16px">Failed to load schedule.<br>${e.message||'Check connection'}</div>
+        <button onclick="loadSchedule()" style="background:var(--accent);color:#000;border:none;padding:10px 24px;border-radius:8px;font-family:var(--fc);font-size:13px;font-weight:800;letter-spacing:2px;cursor:pointer">↻ RETRY</button>`;
       return;
     }
-    toast('Using cached schedule — tap to reload');
+    toast('Using cached schedule');
   }
   renderSchedule();
 }
