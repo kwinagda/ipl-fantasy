@@ -323,49 +323,126 @@ function parseJ(text){
 }
 
 // ── SCHEDULE ──────────────────────────────────────────────────────────────────
-async function loadSchedule(force=false){
-  document.getElementById('sched-loader').style.display='block';
+function loadSchedule(){
+  document.getElementById('sched-loader').style.display='none';
   document.getElementById('sched-list').style.display='none';
-  // Use cached schedule if loaded today and not forcing refresh
-  const todayKey=new Date().toISOString().split('T')[0];
-  if(!force && G.matches.length && G.lastScheduleFetch===todayKey){
-    renderSchedule();return;
-  }
-  try{
-    const todayIST=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Kolkata'})).toISOString().split('T')[0];
-    const text=await claude(
-      `Go to Cricbuzz.com and get the FULL IPL 2026 schedule — all matches, not just upcoming ones.
-      Today's date is ${todayIST} IST.
-      Return ONLY a valid JSON array with every match object:
-      {
-        "id":"m1","num":1,
-        "team1":"MI","team2":"KKR",
-        "date":"2026-03-29","time":"7:30 PM",
-        "venue":"Wankhede Stadium, Mumbai",
-        "status":"live"
-      }
-      status must be: "upcoming", "live", or "done" — based on actual match status on Cricbuzz right now.
-      Use short team codes: MI, KKR, CSK, RCB, SRH, DC, LSG, RR, GT, PBKS.
-      Include ALL matches for the full tournament. Return only the JSON array.`
-    );
-    G.matches=parseJ(text);
-    G.lastScheduleFetch=new Date().toISOString().split('T')[0];
-    // Preserve locked statuses
-    Object.keys(G.mdata).forEach(mid=>{
-      const m=G.matches.find(x=>x.id===mid);
-      if(m&&G.mdata[mid].locked)m.status='done';
-    });
-    save();
-  }catch(e){
-    console.error(e);
-    if(!G.matches.length){
-      document.getElementById('sched-loader').innerHTML=`
-        <div class="ltxt" style="color:var(--hot);margin-bottom:16px">Failed to load schedule.<br>${e.message||'Check connection'}</div>
-        <button onclick="loadSchedule()" style="background:var(--accent);color:#000;border:none;padding:10px 24px;border-radius:8px;font-family:var(--fc);font-size:13px;font-weight:800;letter-spacing:2px;cursor:pointer">↻ RETRY</button>`;
-      return;
+
+  // IPL 2026 full schedule — hardcoded from Cricbuzz (real data)
+  // Status auto-computed from today's date
+  const RAW = [
+    {num:1,t1:'RCB',t2:'SRH',date:'2026-03-28',time:'7:30 PM',venue:'Chinnaswamy Stadium, Bengaluru'},
+    {num:2,t1:'MI',t2:'KKR',date:'2026-03-29',time:'7:30 PM',venue:'Wankhede Stadium, Mumbai'},
+    {num:3,t1:'RR',t2:'CSK',date:'2026-03-30',time:'7:30 PM',venue:'Barsapara Stadium, Guwahati'},
+    {num:4,t1:'PBKS',t2:'GT',date:'2026-03-31',time:'7:30 PM',venue:'Maharaja YS Stadium, Chandigarh'},
+    {num:5,t1:'LSG',t2:'DC',date:'2026-04-01',time:'7:30 PM',venue:'Ekana Stadium, Lucknow'},
+    {num:6,t1:'KKR',t2:'SRH',date:'2026-04-02',time:'7:30 PM',venue:'Eden Gardens, Kolkata'},
+    {num:7,t1:'CSK',t2:'PBKS',date:'2026-04-03',time:'7:30 PM',venue:'MA Chidambaram Stadium, Chennai'},
+    {num:8,t1:'DC',t2:'MI',date:'2026-04-04',time:'3:30 PM',venue:'Arun Jaitley Stadium, Delhi'},
+    {num:9,t1:'GT',t2:'RR',date:'2026-04-04',time:'7:30 PM',venue:'Narendra Modi Stadium, Ahmedabad'},
+    {num:10,t1:'SRH',t2:'LSG',date:'2026-04-05',time:'3:30 PM',venue:'Rajiv Gandhi Stadium, Hyderabad'},
+    {num:11,t1:'RCB',t2:'CSK',date:'2026-04-05',time:'7:30 PM',venue:'Chinnaswamy Stadium, Bengaluru'},
+    {num:12,t1:'KKR',t2:'PBKS',date:'2026-04-06',time:'7:30 PM',venue:'Eden Gardens, Kolkata'},
+    {num:13,t1:'RR',t2:'MI',date:'2026-04-07',time:'7:30 PM',venue:'Barsapara Stadium, Guwahati'},
+    {num:14,t1:'DC',t2:'GT',date:'2026-04-08',time:'7:30 PM',venue:'Arun Jaitley Stadium, Delhi'},
+    {num:15,t1:'KKR',t2:'LSG',date:'2026-04-09',time:'7:30 PM',venue:'Eden Gardens, Kolkata'},
+    {num:16,t1:'RR',t2:'RCB',date:'2026-04-10',time:'7:30 PM',venue:'Barsapara Stadium, Guwahati'},
+    {num:17,t1:'PBKS',t2:'SRH',date:'2026-04-11',time:'3:30 PM',venue:'Maharaja YS Stadium, Chandigarh'},
+    {num:18,t1:'CSK',t2:'DC',date:'2026-04-11',time:'7:30 PM',venue:'MA Chidambaram Stadium, Chennai'},
+    {num:19,t1:'LSG',t2:'GT',date:'2026-04-12',time:'3:30 PM',venue:'Ekana Stadium, Lucknow'},
+    {num:20,t1:'MI',t2:'RCB',date:'2026-04-12',time:'7:30 PM',venue:'Wankhede Stadium, Mumbai'},
+    {num:21,t1:'SRH',t2:'RR',date:'2026-04-13',time:'7:30 PM',venue:'Rajiv Gandhi Stadium, Hyderabad'},
+    {num:22,t1:'GT',t2:'CSK',date:'2026-04-14',time:'7:30 PM',venue:'Narendra Modi Stadium, Ahmedabad'},
+    {num:23,t1:'DC',t2:'KKR',date:'2026-04-15',time:'7:30 PM',venue:'Arun Jaitley Stadium, Delhi'},
+    {num:24,t1:'MI',t2:'LSG',date:'2026-04-16',time:'7:30 PM',venue:'Wankhede Stadium, Mumbai'},
+    {num:25,t1:'PBKS',t2:'RR',date:'2026-04-17',time:'7:30 PM',venue:'Maharaja YS Stadium, Chandigarh'},
+    {num:26,t1:'RCB',t2:'GT',date:'2026-04-18',time:'3:30 PM',venue:'Chinnaswamy Stadium, Bengaluru'},
+    {num:27,t1:'CSK',t2:'SRH',date:'2026-04-18',time:'7:30 PM',venue:'MA Chidambaram Stadium, Chennai'},
+    {num:28,t1:'LSG',t2:'KKR',date:'2026-04-19',time:'3:30 PM',venue:'Ekana Stadium, Lucknow'},
+    {num:29,t1:'DC',t2:'PBKS',date:'2026-04-19',time:'7:30 PM',venue:'Arun Jaitley Stadium, Delhi'},
+    {num:30,t1:'MI',t2:'GT',date:'2026-04-20',time:'7:30 PM',venue:'Wankhede Stadium, Mumbai'},
+    {num:31,t1:'RR',t2:'KKR',date:'2026-04-21',time:'7:30 PM',venue:'Sawai Mansingh Stadium, Jaipur'},
+    {num:32,t1:'SRH',t2:'RCB',date:'2026-04-22',time:'7:30 PM',venue:'Rajiv Gandhi Stadium, Hyderabad'},
+    {num:33,t1:'CSK',t2:'LSG',date:'2026-04-23',time:'7:30 PM',venue:'MA Chidambaram Stadium, Chennai'},
+    {num:34,t1:'GT',t2:'PBKS',date:'2026-04-24',time:'7:30 PM',venue:'Narendra Modi Stadium, Ahmedabad'},
+    {num:35,t1:'MI',t2:'DC',date:'2026-04-25',time:'3:30 PM',venue:'Wankhede Stadium, Mumbai'},
+    {num:36,t1:'KKR',t2:'RCB',date:'2026-04-25',time:'7:30 PM',venue:'Eden Gardens, Kolkata'},
+    {num:37,t1:'RR',t2:'LSG',date:'2026-04-26',time:'3:30 PM',venue:'Sawai Mansingh Stadium, Jaipur'},
+    {num:38,t1:'SRH',t2:'GT',date:'2026-04-26',time:'7:30 PM',venue:'Rajiv Gandhi Stadium, Hyderabad'},
+    {num:39,t1:'PBKS',t2:'MI',date:'2026-04-27',time:'7:30 PM',venue:'Maharaja YS Stadium, Chandigarh'},
+    {num:40,t1:'DC',t2:'RCB',date:'2026-04-28',time:'7:30 PM',venue:'Arun Jaitley Stadium, Delhi'},
+    {num:41,t1:'LSG',t2:'SRH',date:'2026-04-29',time:'7:30 PM',venue:'Ekana Stadium, Lucknow'},
+    {num:42,t1:'CSK',t2:'GT',date:'2026-04-30',time:'7:30 PM',venue:'MA Chidambaram Stadium, Chennai'},
+    {num:43,t1:'KKR',t2:'MI',date:'2026-05-01',time:'7:30 PM',venue:'Eden Gardens, Kolkata'},
+    {num:44,t1:'RR',t2:'DC',date:'2026-05-02',time:'3:30 PM',venue:'Sawai Mansingh Stadium, Jaipur'},
+    {num:45,t1:'RCB',t2:'LSG',date:'2026-05-02',time:'7:30 PM',venue:'Chinnaswamy Stadium, Bengaluru'},
+    {num:46,t1:'GT',t2:'SRH',date:'2026-05-03',time:'3:30 PM',venue:'Narendra Modi Stadium, Ahmedabad'},
+    {num:47,t1:'PBKS',t2:'CSK',date:'2026-05-03',time:'7:30 PM',venue:'Maharaja YS Stadium, Chandigarh'},
+    {num:48,t1:'MI',t2:'RR',date:'2026-05-04',time:'7:30 PM',venue:'Wankhede Stadium, Mumbai'},
+    {num:49,t1:'DC',t2:'LSG',date:'2026-05-05',time:'7:30 PM',venue:'Arun Jaitley Stadium, Delhi'},
+    {num:50,t1:'KKR',t2:'GT',date:'2026-05-06',time:'7:30 PM',venue:'Eden Gardens, Kolkata'},
+    {num:51,t1:'RCB',t2:'PBKS',date:'2026-05-07',time:'7:30 PM',venue:'Chinnaswamy Stadium, Bengaluru'},
+    {num:52,t1:'CSK',t2:'MI',date:'2026-05-08',time:'7:30 PM',venue:'MA Chidambaram Stadium, Chennai'},
+    {num:53,t1:'SRH',t2:'DC',date:'2026-05-09',time:'3:30 PM',venue:'Rajiv Gandhi Stadium, Hyderabad'},
+    {num:54,t1:'GT',t2:'KKR',date:'2026-05-09',time:'7:30 PM',venue:'Narendra Modi Stadium, Ahmedabad'},
+    {num:55,t1:'LSG',t2:'RR',date:'2026-05-10',time:'3:30 PM',venue:'Ekana Stadium, Lucknow'},
+    {num:56,t1:'PBKS',t2:'DC',date:'2026-05-10',time:'7:30 PM',venue:'Maharaja YS Stadium, Chandigarh'},
+    {num:57,t1:'MI',t2:'SRH',date:'2026-05-11',time:'7:30 PM',venue:'Wankhede Stadium, Mumbai'},
+    {num:58,t1:'RCB',t2:'KKR',date:'2026-05-12',time:'7:30 PM',venue:'Chinnaswamy Stadium, Bengaluru'},
+    {num:59,t1:'CSK',t2:'RR',date:'2026-05-13',time:'7:30 PM',venue:'MA Chidambaram Stadium, Chennai'},
+    {num:60,t1:'GT',t2:'LSG',date:'2026-05-14',time:'7:30 PM',venue:'Narendra Modi Stadium, Ahmedabad'},
+    {num:61,t1:'DC',t2:'SRH',date:'2026-05-15',time:'7:30 PM',venue:'Arun Jaitley Stadium, Delhi'},
+    {num:62,t1:'PBKS',t2:'KKR',date:'2026-05-16',time:'3:30 PM',venue:'Maharaja YS Stadium, Chandigarh'},
+    {num:63,t1:'RR',t2:'GT',date:'2026-05-16',time:'7:30 PM',venue:'Sawai Mansingh Stadium, Jaipur'},
+    {num:64,t1:'MI',t2:'CSK',date:'2026-05-17',time:'3:30 PM',venue:'Wankhede Stadium, Mumbai'},
+    {num:65,t1:'RCB',t2:'DC',date:'2026-05-17',time:'7:30 PM',venue:'Chinnaswamy Stadium, Bengaluru'},
+    {num:66,t1:'LSG',t2:'PBKS',date:'2026-05-18',time:'7:30 PM',venue:'Ekana Stadium, Lucknow'},
+    {num:67,t1:'KKR',t2:'RR',date:'2026-05-19',time:'7:30 PM',venue:'Eden Gardens, Kolkata'},
+    {num:68,t1:'SRH',t2:'CSK',date:'2026-05-20',time:'7:30 PM',venue:'Rajiv Gandhi Stadium, Hyderabad'},
+    {num:69,t1:'GT',t2:'RCB',date:'2026-05-21',time:'7:30 PM',venue:'Narendra Modi Stadium, Ahmedabad'},
+    {num:70,t1:'DC',t2:'MI',date:'2026-05-22',time:'7:30 PM',venue:'Arun Jaitley Stadium, Delhi'},
+    {num:71,t1:'TBD',t2:'TBD',date:'2026-05-26',time:'7:30 PM',venue:'TBD — Qualifier 1'},
+    {num:72,t1:'TBD',t2:'TBD',date:'2026-05-27',time:'7:30 PM',venue:'TBD — Eliminator'},
+    {num:73,t1:'TBD',t2:'TBD',date:'2026-05-29',time:'7:30 PM',venue:'TBD — Qualifier 2'},
+    {num:74,t1:'TBD',t2:'TBD',date:'2026-05-31',time:'7:30 PM',venue:'TBD — Final'},
+  ];
+
+  // Auto-compute status from IST date/time
+  const nowIST = new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Kolkata'}));
+  const todayIST = nowIST.toISOString().split('T')[0];
+
+  const newMatches = RAW.map(m => {
+    const id = 'm'+m.num;
+    const md = G.mdata[id]||{};
+    let status;
+    if(md.locked){
+      status = 'done';
+    } else if(m.date < todayIST){
+      status = 'done';
+    } else if(m.date === todayIST){
+      // Parse match time to check if live window (within 4 hours of start)
+      const [h,minpart] = m.time.replace(' PM','').replace(' AM','').split(':');
+      let hour = parseInt(h) + (m.time.includes('PM') && h!=='12' ? 12 : 0);
+      const matchStart = new Date(nowIST);
+      matchStart.setHours(hour, parseInt(minpart)||0, 0, 0);
+      const diffMin = (nowIST - matchStart) / 60000;
+      if(diffMin >= -30 && diffMin <= 240) status = 'live';
+      else if(diffMin > 240) status = 'done';
+      else status = 'upcoming';
+    } else {
+      status = 'upcoming';
     }
-    toast('Using cached schedule');
+    return {id, num:m.num, team1:m.t1, team2:m.t2, date:m.date, time:m.time, venue:m.venue, status};
+  });
+
+  // Merge with existing G.matches to preserve any overrides
+  if(G.matches.length){
+    newMatches.forEach(m => {
+      const ex = G.matches.find(x=>x.id===m.id);
+      if(ex && ex.status==='done') m.status='done';
+    });
   }
+  G.matches = newMatches;
+  save();
   renderSchedule();
 }
 
