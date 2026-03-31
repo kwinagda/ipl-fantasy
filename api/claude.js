@@ -67,23 +67,37 @@ export default async function handler(req, res) {
       return res.status(200).json({ matches: allMatches });
     }
 
-    // ── SQUADS: get full squad for a series (used as player pool) ─────────
+    // ── SQUADS: get full squad for a series ─────────────────────────────
     if (action === 'squads') {
       if (!seriesId) return res.status(400).json({ error: 'seriesId required' });
-      // series/v1/{seriesId} returns squad info
-      const data = await cb(`series/v1/${seriesId}`);
+
+      const data = await cb(`series/get-squads?seriesId=${seriesId}`);
+      console.log('squads raw keys:', Object.keys(data));
+
       const squads = [];
-      for (const squad of (data.squads || [])) {
-        squads.push({
-          teamName: squad.team?.teamName,
-          teamSName: squad.team?.teamSName,
-          players: (squad.player || []).map(p => ({
-            name: p.fullName || p.name,
-            role: mapRole(p.role)
-          }))
-        });
+
+      // Response shape 1: { squads: [ { squad: { player: [...] }, team: {...} } ] }
+      for (const entry of (data.squads || [])) {
+        const team = entry.team || {};
+        const players = (entry.squad?.player || entry.player || []).map(p => ({
+          name: p.fullName || p.name,
+          role: mapRole(p.role)
+        }));
+        if (players.length) squads.push({ teamName: team.teamName, teamSName: team.teamSName, players });
       }
-      return res.status(200).json({ squads });
+
+      // Response shape 2: top-level squads array with different structure
+      if (!squads.length && data.squadDetails) {
+        for (const sd of (data.squadDetails || [])) {
+          const players = (sd.squadItems || []).map(p => ({
+            name: p.player?.fullName || p.player?.name || p.name,
+            role: mapRole(p.player?.role || p.role)
+          }));
+          if (players.length) squads.push({ teamName: sd.teamName, teamSName: sd.teamSName, players });
+        }
+      }
+
+      return res.status(200).json({ squads, _raw: data });
     }
 
     // ── SCORECARD: mcenter/v1/{matchId}/hscard ────────────────────────────
