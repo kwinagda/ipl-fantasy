@@ -702,7 +702,11 @@ async function refreshXI(){
   try{
     // Use stored cbMatchId (from live_matches fetch) or fallback to match id
     const cbId = m.cbMatchId || m.id.replace('m','');
-    const data = await callAPI('squads', null, m.cbSeriesId || '9335');
+    const sid = m.cbSeriesId || G.matches.find(x=>x.cbSeriesId)?.cbSeriesId;
+    if(!sid){ toast('No series ID yet — wait for sync'); ico.className=''; btn.disabled=false; return; }
+    console.log('Fetching squads for seriesId:', sid);
+    const data = await callAPI('squads', null, sid);
+    console.log('Squads response:', data);
     // Build pool from squads (both teams)
     const newPool = [];
     for(const squad of (data.squads||[])){
