@@ -306,15 +306,15 @@ function isToday(ds){
 }
 
 // ── API ───────────────────────────────────────────────────────────────────────
-async function claude(prompt){
+async function callAPI(action, matchId=null){
   const r=await fetch(API,{
     method:'POST',
     headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({prompt})
+    body:JSON.stringify({action, matchId})
   });
   const d=await r.json();
-  if(!r.ok)throw new Error(d.error?.message||d.error||'API error');
-  return d.text||'';
+  if(!r.ok)throw new Error(d.error||'API error');
+  return d;
 }
 function parseJ(text){
   const m=text.match(/[\[{][\s\S]*[\]}]/);
@@ -649,25 +649,17 @@ async function refreshXI(){
   btn.disabled=true;ico.className='spin';
   const m=G.matches.find(x=>x.id===S.mid);
   try{
-    const text=await claude(
-      `Search Cricbuzz RIGHT NOW for the IPL 2026 match: ${m.team1} vs ${m.team2} on ${m.date}.
-      Get the Playing XI for both teams — if officially announced use those, otherwise use the most likely XI from recent form on Cricbuzz.
-      Return ONLY valid JSON:
-      {
-        "confirmed": true or false,
-        "xi1": [
-          {"name":"Rohit Sharma","role":"BAT"},
-          {"name":"Jasprit Bumrah","role":"BOWL"},
-          ...
-        ],
-        "xi2": [...]
-      }
-      role must be: BAT, BOWL, AR, or WK.
-      Include exactly 11 players per team. Return only JSON.`
-    );
-    const data=parseJ(text);
+    // Use stored cbMatchId (from live_matches fetch) or fallback to match id
+    const cbId = m.cbMatchId || m.id.replace('m','');
+    const data = await callAPI('playing11', cbId);
     const mkPool=(xi,team)=>(xi||[]).map(p=>({name:p.name,role:p.role||'BAT',team}));
-    const newPool=[...mkPool(data.xi1,m.team1),...mkPool(data.xi2,m.team2)];
+    const newPool=[...mkPool(data.xi1||[],m.team1),...mkPool(data.xi2||[],m.team2)];
+
+    if(newPool.length < 10){
+      toast('XI not announced yet — check back closer to match time');
+      ico.className='';btn.disabled=false;
+      return;
+    }
 
     // Check for dropped players
     if(S.picks.length>0){
@@ -683,11 +675,14 @@ async function refreshXI(){
       }
     }
 
-    S.pool=newPool.length>=10?newPool:S.pool;
+    S.pool=newPool;
     S.xiConfirmed=data.confirmed||false;
     renderPickUI();
-    toast(data.confirmed?'✓ Confirmed XI loaded!':'⚠️ Likely XI loaded (not yet confirmed)');
-  }catch(e){console.error(e);toast('Could not fetch XI — try again');}
+    toast('✓ Playing XI loaded from Cricbuzz!');
+  }catch(e){
+    console.error(e);
+    toast('Could not fetch XI: '+e.message);
+  }
   ico.className='';btn.disabled=S.picks.length>=12;
 }
 
@@ -741,29 +736,15 @@ async function doRefreshLive(){
   const btn=document.getElementById('lrbtn');const ico=document.getElementById('lrico');
   btn.disabled=true;ico.className='spin';
   const m=G.matches.find(x=>x.id===liveMid);
-  const md=G.mdata[liveMid]||{};
-  const names=(md.picks||[]).map(p=>p.name).join(', ');
   try{
-    const text=await claude(
-      `Search Cricbuzz RIGHT NOW for the scorecard of IPL 2026: ${m.team1} vs ${m.team2} on ${m.date}.
-      For each of these players: ${names}
-      Get their batting runs scored AND wickets taken as a bowler in this match.
-      Return ONLY valid JSON:
-      {
-        "matchScore":"MI 183/4 (18.3 ov) vs KKR 156 (19.2 ov)",
-        "status":"live or completed or upcoming",
-        "players":{
-          "Rohit Sharma":{"runs":45,"wickets":0},
-          "Jasprit Bumrah":{"runs":4,"wickets":3}
-        }
-      }
-      Every player I listed must appear. Use 0 if didn't bat or bowl. Return only JSON.`
-    );
-    const data=parseJ(text);
+    const cbId = m.cbMatchId || m.id.replace('m','');
+    const data = await callAPI('scorecard', cbId);
+
     if(!G.mdata[liveMid])G.mdata[liveMid]={};
     G.mdata[liveMid].scoreData=data.players||{};
     document.getElementById('lscore').textContent=data.matchScore||'Score updated';
     document.getElementById('ltime').textContent=`Updated ${new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'})}`;
+
     if(data.status==='completed'){
       const mi=G.matches.find(x=>x.id===liveMid);if(mi)mi.status='done';
       G.mdata[liveMid].locked=true;
@@ -772,7 +753,7 @@ async function doRefreshLive(){
       toast('Match done — points locked 🔒');
     }
     save();renderLiveBody(liveMid);
-  }catch(e){console.error(e);toast('Score fetch failed');}
+  }catch(e){console.error(e);toast('Score fetch failed: '+e.message);}
   ico.className='';btn.disabled=false;
 }
 
@@ -818,6 +799,27 @@ function renderStandings(){
 }
 
 load();updateSB();loadSchedule();
+// Fetch live Cricbuzz match IDs and map to our schedule
+async function syncCbMatchIds(){
+  try{
+    const data = await callAPI('live_matches');
+    const cbMatches = data.matches || [];
+    cbMatches.forEach(cm => {
+      // Match by team names
+      const m = G.matches.find(x =>
+        (x.team1===cm.team1 && x.team2===cm.team2) ||
+        (x.team1===cm.team2 && x.team2===cm.team1)
+      );
+      if(m){
+        m.cbMatchId = cm.cbMatchId || cm.id;
+        if(cm.status==='live') m.status='live';
+      }
+    });
+    save();
+    renderSchedule();
+  }catch(e){ console.log('cbMatchId sync skipped:', e.message); }
+}
+syncCbMatchIds();
 </script>
 </body>
 </html>
