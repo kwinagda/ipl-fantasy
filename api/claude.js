@@ -8,7 +8,19 @@ export default async function handler(req, res) {
 
   try {
     const { prompt } = req.body;
-    const apiKey = process.env.GEMINI_API_KEY;
+
+    // Add up to 3 keys in Vercel env vars — only GEMINI_API_KEY_1 is required
+    const keys = [
+      process.env.GEMINI_API_KEY_1,
+      process.env.GEMINI_API_KEY_2,
+      process.env.GEMINI_API_KEY_3,
+    ].filter(Boolean);
+
+    if (!keys.length) {
+      return res.status(500).json({ error: 'No API keys configured' });
+    }
+
+    const models = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-2.0-flash-lite'];
 
     const payload = {
       contents: [{ parts: [{ text: prompt }] }],
@@ -16,49 +28,44 @@ export default async function handler(req, res) {
       generationConfig: { maxOutputTokens: 2000, temperature: 0.1 }
     };
 
-    // Try flash first, fall back to flash-lite
-    const models = ['gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-1.5-flash'];
+    // Try every key + model combination until one works
+    for (const key of keys) {
+      for (const model of models) {
+        const response = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          }
+        );
 
-    let lastError = null;
-    for (const model of models) {
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
+        const data = await response.json();
+
+        if (response.status === 429 || response.status === 403) {
+          console.log(`${model} quota/auth issue, trying next...`);
+          continue;
         }
-      );
 
-      const data = await response.json();
+        if (!response.ok) {
+          console.error(`${model} error:`, JSON.stringify(data));
+          continue;
+        }
 
-      if (response.status === 429) {
-        console.log(`${model} quota exceeded, trying next...`);
-        lastError = data;
-        continue; // try next model
+        const text = data.candidates?.[0]?.content?.parts
+          ?.filter(p => p.text)
+          ?.map(p => p.text)
+          ?.join('\n') || '';
+
+        console.log(`Success: ${model}`);
+        return res.status(200).json({ text });
       }
-
-      if (!response.ok) {
-        console.error(`${model} error:`, JSON.stringify(data));
-        lastError = data;
-        continue;
-      }
-
-      const text = data.candidates?.[0]?.content?.parts
-        ?.filter(p => p.text)
-        ?.map(p => p.text)
-        ?.join('\n') || '';
-
-      console.log(`Success with ${model}`);
-      return res.status(200).json({ text });
     }
 
-    // All models failed
-    console.error('All models failed:', JSON.stringify(lastError));
-    return res.status(429).json({ error: 'quota_exceeded', details: lastError });
+    return res.status(429).json({ error: 'quota_exceeded' });
 
   } catch (err) {
-    console.error('Handler error:', err.message);
+    console.error('Error:', err.message);
     return res.status(500).json({ error: err.message });
   }
 }
