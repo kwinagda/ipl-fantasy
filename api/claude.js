@@ -3,14 +3,13 @@ const HOST = 'cricbuzz-cricket.p.rapidapi.com';
 const BASE = `https://${HOST}`;
 
 async function cb(path) {
-  const url = `${BASE}/${path}`;
-  const r = await fetch(url, {
+  const r = await fetch(`${BASE}/${path}`, {
     headers: { 'x-rapidapi-key': KEY, 'x-rapidapi-host': HOST }
   });
   const text = await r.text();
-  if (!r.ok) throw new Error(`CB ${r.status} ${path}: ${text.slice(0,200)}`);
+  if (!r.ok) throw new Error(`CB ${r.status} /${path}: ${text.slice(0,200)}`);
   try { return JSON.parse(text); }
-  catch(e) { throw new Error(`Bad JSON from ${path}`); }
+  catch(e) { throw new Error(`Bad JSON from /${path}`); }
 }
 
 function mapRole(role) {
@@ -33,18 +32,17 @@ export default async function handler(req, res) {
 
   try {
 
-    // ── GET IPL MATCH IDs from series ─────────────────────────────────────
+    // ── SYNC: find IPL match IDs ──────────────────────────────────────────
     if (action === 'sync_matches') {
-      // Get recent + upcoming series list to find IPL
-      const [recent, upcoming] = await Promise.allSettled([
-        cb('matches/recent'),
-        cb('matches/upcoming')
+      const results = await Promise.allSettled([
+        cb('matches/v1/live'),
+        cb('matches/v1/recent'),
+        cb('matches/v1/upcoming')
       ]);
-
       const allMatches = [];
-      for (const result of [recent, upcoming]) {
-        if (result.status !== 'fulfilled') continue;
-        for (const type of (result.value.typeMatches || [])) {
+      for (const r of results) {
+        if (r.status !== 'fulfilled') continue;
+        for (const type of (r.value.typeMatches || [])) {
           for (const series of (type.seriesMatches || [])) {
             const sw = series.seriesAdWrapper;
             if (!sw) continue;
@@ -61,97 +59,70 @@ export default async function handler(req, res) {
                 team1: mi.team1?.teamSName,
                 team2: mi.team2?.teamSName,
                 state: mi.state,
-                startDate: mi.startDate
               });
             }
           }
         }
       }
-
       return res.status(200).json({ matches: allMatches });
     }
 
-    // ── GET SQUADS FOR A SERIES (used as player pool) ─────────────────────
+    // ── SQUADS: get full squad for a series (used as player pool) ─────────
     if (action === 'squads') {
       if (!seriesId) return res.status(400).json({ error: 'seriesId required' });
-      const data = await cb(`series/get-squads?seriesId=${seriesId}`);
-      return res.status(200).json(data);
+      // series/v1/{seriesId} returns squad info
+      const data = await cb(`series/v1/${seriesId}`);
+      const squads = [];
+      for (const squad of (data.squads || [])) {
+        squads.push({
+          teamName: squad.team?.teamName,
+          teamSName: squad.team?.teamSName,
+          players: (squad.player || []).map(p => ({
+            name: p.fullName || p.name,
+            role: mapRole(p.role)
+          }))
+        });
+      }
+      return res.status(200).json({ squads });
     }
 
-    // ── GET MATCH INFO (has playing XI after toss) ────────────────────────
-    if (action === 'match_info') {
-      if (!matchId) return res.status(400).json({ error: 'matchId required' });
-      const data = await cb(`matches/get-info?matchId=${matchId}`);
-
-      // Extract playing XI from matchInfo if available
-      let xi1 = [], xi2 = [];
-      const squads = data.matchInfo?.squads || data.squads || [];
-
-      for (const squad of squads) {
-        const players = (squad.players || []).map(p => ({
-          name: p.fullName || p.name,
-          role: mapRole(p.role)
-        }));
-        if (xi1.length === 0) xi1 = players;
-        else xi2 = players;
-      }
-
-      // Also check team1/team2 playing11 fields
-      const p11 = data.matchInfo?.playingXI || data.playingXI;
-      if (p11) {
-        xi1 = (p11.team1 || []).map(p => ({ name: p.fullName || p.name, role: mapRole(p.role) }));
-        xi2 = (p11.team2 || []).map(p => ({ name: p.fullName || p.name, role: mapRole(p.role) }));
-      }
-
-      const confirmed = xi1.length >= 10 && xi2.length >= 10;
-      return res.status(200).json({ confirmed, xi1, xi2, raw: data });
-    }
-
-    // ── GET SCORECARD ─────────────────────────────────────────────────────
+    // ── SCORECARD: mcenter/v1/{matchId}/hscard ────────────────────────────
     if (action === 'scorecard') {
       if (!matchId) return res.status(400).json({ error: 'matchId required' });
-
+      // Try live scard first, fall back to hscard
       let data;
-      try {
-        data = await cb(`matches/get-scorecard?matchId=${matchId}`);
-      } catch(e) {
-        data = await cb(`matches/get-scorecard-v2?matchId=${matchId}`);
-      }
+      try { data = await cb(`mcenter/v1/${matchId}/scard`); }
+      catch(e) { data = await cb(`mcenter/v1/${matchId}/hscard`); }
 
       const players = {};
       let matchScore = '';
       let status = 'upcoming';
 
-      // Match status
       const header = data.matchHeader || {};
       matchScore = header.status || '';
       const state = (header.state || '').toLowerCase();
-      if (state.includes('progress')) status = 'live';
-      else if (state.includes('complete') || header.complete) status = 'completed';
+      if (state === 'in progress') status = 'live';
+      else if (state === 'complete') status = 'completed';
 
-      // Parse innings
-      const innings = data.scoreCard || [];
-      for (const inn of innings) {
+      for (const inn of (data.scoreCard || [])) {
         // Batting
-        const batData = inn.batTeamDetails?.batsmanData || {};
-        for (const bat of Object.values(batData)) {
-          const name = bat.batName;
-          if (!name) continue;
+        for (const bat of Object.values(inn.batTeamDetails?.batsmanData || {})) {
+          const name = bat.batName; if (!name) continue;
           if (!players[name]) players[name] = { runs: 0, wickets: 0 };
           players[name].runs += parseInt(bat.runs) || 0;
         }
         // Bowling
-        const bowlData = inn.bowlTeamDetails?.bowlersData || {};
-        for (const bowl of Object.values(bowlData)) {
-          const name = bowl.bowlName;
-          if (!name) continue;
+        for (const bowl of Object.values(inn.bowlTeamDetails?.bowlersData || {})) {
+          const name = bowl.bowlName; if (!name) continue;
           if (!players[name]) players[name] = { runs: 0, wickets: 0 };
           players[name].wickets += parseInt(bowl.wickets) || 0;
         }
-        // Build score string
+        // Score string
         const sd = inn.scoreDetails || {};
-        const teamName = inn.batTeamDetails?.batTeamName || '';
-        if (teamName) matchScore = matchScore || `${teamName} ${sd.runs||0}/${sd.wickets||0} (${sd.overs||0} ov)`;
+        const tn = inn.batTeamDetails?.batTeamName || '';
+        if (tn && sd.runs !== undefined) {
+          matchScore = `${tn} ${sd.runs}/${sd.wickets} (${sd.overs} ov)`;
+        }
       }
 
       return res.status(200).json({ players, matchScore, status });
