@@ -799,22 +799,31 @@ function renderStandings(){
 }
 
 load();updateSB();loadSchedule();
-// Fetch live Cricbuzz match IDs and map to our schedule
+// Sync real Cricbuzz match IDs to our hardcoded schedule
 async function syncCbMatchIds(){
   try{
-    const data = await callAPI('live_matches');
-    const cbMatches = data.matches || [];
+    const data = await callAPI('sync_matches');
+    const cbMatches = (data.matches || []).filter(m => m.isIPL);
+    if(!cbMatches.length){ console.log('No IPL matches found in sync'); return; }
+    let updated = 0;
     cbMatches.forEach(cm => {
-      // Match by team names
-      const m = G.matches.find(x =>
-        (x.team1===cm.team1 && x.team2===cm.team2) ||
-        (x.team1===cm.team2 && x.team2===cm.team1)
-      );
+      // Normalize team names for matching
+      const norm = s => (s||'').toUpperCase().replace(/[^A-Z]/g,'');
+      const m = G.matches.find(x => {
+        const t1 = norm(x.team1), t2 = norm(x.team2);
+        const ct1 = norm(cm.team1), ct2 = norm(cm.team2);
+        return (t1===ct1 && t2===ct2) || (t1===ct2 && t2===ct1);
+      });
       if(m){
-        m.cbMatchId = cm.cbMatchId || cm.id;
-        if(cm.status==='live') m.status='live';
+        m.cbMatchId = cm.matchId;
+        const newStatus = cm.state ? 
+          (cm.state==='In Progress'?'live':cm.state==='Complete'?'done':'upcoming') 
+          : m.status;
+        if(!G.mdata[m.id]?.locked) m.status = newStatus;
+        updated++;
       }
     });
+    console.log(`Synced ${updated} IPL matches`);
     save();
     renderSchedule();
   }catch(e){ console.log('cbMatchId sync skipped:', e.message); }
