@@ -651,7 +651,7 @@ async function refreshXI(){
   try{
     // Use stored cbMatchId (from live_matches fetch) or fallback to match id
     const cbId = m.cbMatchId || m.id.replace('m','');
-    const data = await callAPI('playing11', cbId);
+    const data = await callAPI('match_info', cbId);
     const mkPool=(xi,team)=>(xi||[]).map(p=>({name:p.name,role:p.role||'BAT',team}));
     const newPool=[...mkPool(data.xi1||[],m.team1),...mkPool(data.xi2||[],m.team2)];
 
